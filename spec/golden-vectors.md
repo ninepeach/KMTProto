@@ -17,7 +17,7 @@
 | STATE_QUERY | 11 | `010b00000000001800000000000000000000000000000005000100016e00016b` |
 | STATE_SNAPSHOT | 12 | `010c00000000002c00000000000000000000000000000005000000000100010100016e00016b0000000000000001000000000141` |
 | STATE_UPDATE | 13 | `010d0000000000240000000000000000000000000000000600016e00016b0000000000000001000000000141` |
-| PING | 14 | `010e0000000000080000000000000007` |
+| PING | 14 | `010e000000000009000000000000000700` |
 | PONG | 15 | `010f0000000000080000000000000007` |
 | ERROR | 16 | `011000000000001a0002000000000000000000000000000000000000000000000000` |
 | SYNC_BEGIN | 17 | `011100000000001f00000000000000000000000000000007000000000000000100017300000001` |
@@ -26,7 +26,7 @@
 
 ## Variant vectors
 
-One more example each for behavior that the 19 base vectors do not show: RESUME with `state_sync_requested=1`, an ERROR with a positive `retry_after_ms`, the recovery-scoped REPLAY_PARTIAL, a Full Sync WELCOME (admission=3, generation=2, replay_to=5), a STATE_QUERY_FAILED that references its `query_id` with ErrorRef kind=2, a REPLAY_UNAVAILABLE admission rejection, and HELLO ATTACH with `cursor_last_seq`=5 and `state_sync_requested=1`. These rows are validated like the base vectors, with the same type column.
+One more example each for behavior that the 19 base vectors do not show: RESUME with `state_sync_requested=1`, an ERROR with a positive `retry_after_ms`, the recovery-scoped REPLAY_PARTIAL, a Full Sync WELCOME (admission=3, generation=2, replay_to=5), a STATE_QUERY_FAILED that references its `query_id` with ErrorRef kind=2, a REPLAY_UNAVAILABLE admission rejection, a renewal PING (`renew`=1), and HELLO ATTACH with `cursor_last_seq`=5 and `state_sync_requested=1`. These rows are validated like the base vectors, with the same type column.
 
 | Variant | Type | Complete frame (hex) |
 |---|---:|---|
@@ -36,6 +36,7 @@ One more example each for behavior that the 19 base vectors do not show: RESUME 
 | WELCOME_FULL_SYNC | 2 | `01020000000000460000000000000000000000000000000100017303000000000000000200000000000000050000100000020002000200000064000a000003e800000bb80000003c00000e100000` |
 | ERROR_QUERY_FAILED | 16 | `011000000000001a0008010200000000000000000000000000000005000000000000` |
 | ERROR_REPLAY_UNAVAILABLE | 16 | `011000000000001a0011000000000000000000000000000000000000000000000000` |
+| PING_RENEW | 14 | `010e000000000009000000000000000801` |
 | HELLO_ATTACH | 1 | `01010000000000170100017300000010000000010000000000000000000501` |
 
 ## Negative vectors and checks
@@ -44,7 +45,8 @@ One more example each for behavior that the 19 base vectors do not show: RESUME 
 - Change reserved flags from `0000` to `0001`: reject.
 - Increase body_length by 1 without adding bytes: reject truncation.
 - Append one trailing octet without changing body_length: reject Frame length mismatch.
-- Change any boolean field from `00`/`01` to `02`: reject enum.
+- Change any boolean field from `00`/`01` to `02`, including PING `renew`: reject enum.
+- A Server-originated PING with `renew`=1, or a renewal PING arriving before `last_renewal_at + renewal_interval_ms`: close with PROTOCOL_STATE (stateful; not checked by the vector tool).
 - WELCOME with `max_frame_bytes` below 4096, with `heartbeat_ms` above `session_ttl_seconds * 125`, with `idle_timeout_ms` not above `heartbeat_ms`, or with `absolute_remaining_seconds` of 0: reject.
 - ERROR RATE_LIMITED with `retry_after_ms` 0, or any other code except SEND_PENDING with a positive `retry_after_ms`: reject.
 - ERROR whose `retryable` byte differs from the registry value for its code, or with a code not in the registry: reject.
@@ -60,6 +62,6 @@ One more example each for behavior that the 19 base vectors do not show: RESUME 
 
 ## Scope
 
-RESUME includes the mandatory trailing state_sync_requested=0 byte. ERROR includes retry_after_ms=0 after ErrorRef. HELLO and RESUME carry ClientLimits after Capabilities; HELLO carries `cursor_last_seq` only in mode 1, with no presence byte; Limits carries `max_inflight_query`. These are draft-breaking changes; the layouts are in [protocol.md](protocol.md) section 2.5.
+RESUME includes the mandatory trailing state_sync_requested=0 byte. ERROR includes retry_after_ms=0 after ErrorRef. HELLO and RESUME carry ClientLimits after Capabilities; HELLO carries `cursor_last_seq` only in mode 1, with no presence byte; Limits carries `max_inflight_query`; PING carries a trailing `renew` byte (PONG is unchanged). These are draft-breaking changes; the layouts are in [protocol.md](protocol.md) section 2.5.
 
-These vectors cover the 19 Frame bodies with one compact example each, plus seven variants for behavior the base examples do not show. They do not establish full malformed-field coverage, multi-page interop or independent implementation conformance. The complete acceptance plan is in [conformance.md](conformance.md).
+These vectors cover the 19 Frame bodies with one compact example each, plus eight variants for behavior the base examples do not show. They do not establish full malformed-field coverage, multi-page interop or independent implementation conformance. The complete acceptance plan is in [conformance.md](conformance.md).

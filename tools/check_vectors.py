@@ -149,7 +149,8 @@ def parse(raw):
                 if deleted != status - 1: raise ValueError("snapshot status/deleted mismatch")
             elif status != 0: raise ValueError("snapshot status")
     elif typ == 13: r.ident(); r.entry()
-    elif typ in (14, 15): r.num(8)
+    elif typ == 14: r.num(8); r.boolean()  # nonce, renew
+    elif typ == 15: r.num(8)
     elif typ == 16:
         code = r.num(2)
         if code not in ERROR_RETRYABLE: raise ValueError("unregistered error code")

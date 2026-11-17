@@ -41,8 +41,8 @@
 | L02 | Session absolute TTL elapsed despite PINGs | RESUME fails; no takeover | R6.1, R6.6 |
 | L03 | HELLO NEW without sync | READY at WELCOME | R5.11, R5.13 |
 | L04 | SEND before recovery completion | Reject without effect | R5.8, R5.11 |
-| P01 | Due PING with valid reauthorization | Durable lease renewal before matching PONG | R6.7 |
-| P02 | Due PING with revoked authorization | No matching PONG; Channel closed | R6.8 |
+| P01 | Due renewal PING (renew=1) with valid reauthorization | Durable lease renewal before matching PONG | R6.7 |
+| P02 | Due renewal PING (renew=1) with revoked authorization | No matching PONG; Channel closed | R6.8 |
 | P03 | NEW selected existing Stream | Cursor begins at authorized Stream head | R5.12, R5.13 |
 | P04 | RESUME sync flag=1 | Full Sync or reject; preserve Session and SEND dedup | R5.17, R5.19 |
 | P05 | Replay exceeds per-attempt bound | Contiguous progress, REPLAY_PARTIAL, close; next RESUME continues | R10.9, R10.10, R10.11 |
@@ -50,7 +50,7 @@
 | P07 | RATE_LIMITED SEND | No effect; retry_after_ms>0; same msg_id on retry | R13.3, R13.8, R8.18 |
 | P08 | Full Sync skips EVENT-only history | Notify Application before READY | R12.13 |
 | P09 | WELCOME carries absolute_remaining_seconds | Client estimates the absolute deadline early, drains SENDs and rotates Session before it | R6.5, R6.11 |
-| P10 | PING sent before renewal_due | PONG carries no lease information; lease_deadline does not move | R6.9 |
+| P10 | Ordinary PING (renew=0) | PONG carries no lease information; lease_deadline does not move | R6.9 |
 | P11 | EVENT n+1 accepted before EVENT n is durable | No violation; Cursor lags; reconnect replays from the Cursor | R7.5 |
 | P12 | In-flight count exceeded | RATE_LIMITED with retry_after_ms>0 before any effect, never LIMIT_EXCEEDED | R13.8 |
 | P13 | WELCOME with heartbeat_ms above session_ttl_seconds*1000/8, or absolute_remaining_seconds=0 | Client closes the Connection | R14.2 |
@@ -72,6 +72,9 @@
 | P29 | Frame with header version 2 sent to a Server in CHANNEL_READY | Body not parsed; optional ERROR UNSUPPORTED_VERSION; Channel closed | R2.23 |
 | P30 | Renewal PING outstanding while a later ordinary PING is answered first | Ordinary PONG accepted by nonce; lease moves only on the renewal PONG | R7.2, R6.9 |
 | P31 | Session ID unknown vs. Session ID owned by another Principal | Both UNAUTHORIZED, indistinguishable | R5.2, R13.7 |
+| P32 | Ordinary PING (renew=0) arrives after last_renewal_at + renewal_interval_ms, followed by the Client's renewal PING | First PING causes no write or reauthorization; the renewal PING renews and its PONG proves a persisted renewal at or after its send time | R6.6, R6.7, R6.9 |
+| P33 | Renewal PING arrives before last_renewal_at + renewal_interval_ms | No renewal, no matching PONG; Channel closed with PROTOCOL_STATE | R6.7 |
+| P34 | Server-originated PING with renew=1 | Client closes the Channel with PROTOCOL_STATE | R6.6 |
 
 ## Implementation interoperability artifacts
 
