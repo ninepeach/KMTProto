@@ -41,7 +41,6 @@
 | L02 | Session absolute TTL elapsed despite PINGs | RESUME fails; no takeover | R6.1, R6.6 |
 | L03 | HELLO NEW without sync | READY at WELCOME | R5.11, R5.13 |
 | L04 | SEND before recovery completion | Reject without effect | R5.8, R5.11 |
-
 | P01 | Due PING with valid reauthorization | Durable lease renewal before matching PONG | R6.7 |
 | P02 | Due PING with revoked authorization | No matching PONG; Channel closed | R6.8 |
 | P03 | NEW selected existing Stream | Cursor begins at authorized Stream head | R5.12, R5.13 |
@@ -59,6 +58,20 @@
 | P15 | ERROR sent by either peer while RECOVERING | Accepted; connection state unchanged unless the code requires closing | R5.10, R13.6 |
 | P16 | HELLO NEW, HELLO ATTACH and RESUME with each state_sync_requested value | Exactly the admission or rejection in the R5.19 table; RESUME keeps SEND dedup | R5.19, R5.17 |
 | P17 | REQUEST outstanding when a newer Generation takes over | Logically cancelled; a late RESPONSE is not delivered on the new Channel | R5.22, R9.2 |
+| P18 | Full Sync commits baseline_seq=B while the Client's old Cursor was C < B | Client accepts live EVENT B+1 after RECOVERY_COMPLETE; no gap detected | R7.4, R12.11 |
+| P19 | HELLO NEW with WELCOME replay_to=H | Client accepts live EVENT H+1 as the first EVENT | R7.4, R5.13 |
+| P20 | RESUME with state_sync_requested=1 when replay is possible | FULL_SYNC (or reject if no baseline), never RESUMED | R5.18, R5.19 |
+| P21 | RESUME with state_sync_requested=0, Cursor no longer retained, Full Sync not chosen | REPLAY_UNAVAILABLE, no takeover; a retry with state_sync_requested=1 is admissible | R5.18, R13.10 |
+| P22 | RESUME after Session deadline passed | SESSION_EXPIRED, not ADMISSION_REJECTED or REPLAY_UNAVAILABLE | R13.10, R6.3 |
+| P23 | Two STATE_QUERYs outstanding, one fails | ERROR carries ErrorRef kind=2 with that query_id; the other query completes | R11.15, R13.4 |
+| P24 | STATE_QUERY above max_inflight_query | RATE_LIMITED with kind=2 ref, before any read | R11.15, R13.8 |
+| P25 | RESUME of a Session whose first WELCOME had max_frame_bytes=M | Later WELCOME carries max_frame_bytes >= M, or the RESUME is rejected without takeover | R14.4, R8.20 |
+| P26 | Application submits a SEND larger than the effective max_frame_bytes | Rejected locally, never stored in the outbox or sent | R8.20 |
+| P27 | Full Sync whose total_entries exceeds the Client's max_sync_entries | Server rejects with LIMIT_EXCEEDED before takeover; a Client receiving such SYNC_BEGIN aborts | R14.8 |
+| P28 | WELCOME max_frame_bytes above the Client's ClientLimits value | Client closes the Connection | R14.8, R2.7 |
+| P29 | Frame with header version 2 sent to a Server in CHANNEL_READY | Body not parsed; optional ERROR UNSUPPORTED_VERSION; Channel closed | R2.23 |
+| P30 | Renewal PING outstanding while a later ordinary PING is answered first | Ordinary PONG accepted by nonce; lease moves only on the renewal PONG | R7.2, R6.9 |
+| P31 | Session ID unknown vs. Session ID owned by another Principal | Both UNAUTHORIZED, indistinguishable | R5.2, R13.7 |
 
 ## Implementation interoperability artifacts
 

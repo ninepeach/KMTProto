@@ -52,7 +52,7 @@ Application / Auth Provider → KMTProto Core → Channel Adapter
 - **R2.1** All integers are unsigned and big-endian: `u8`, `u16`, `u32`, `u64`.
 - **R2.2** `id128` is exactly 16 bytes; all-zero identifiers are forbidden except the explicitly defined null ErrorRef. `id128` is opaque and not a UUID textual encoding.
 - **R2.3** `bytes` is `u32 length || length raw octets`. `text` is `u16 byte_length || UTF-8 octets`, nonempty unless a field explicitly allows empty (HELLO NEW `stream_id` and ERROR `detail`). A receiver MUST reject malformed UTF-8, NUL, overlong encodings and unassigned lengths. There is no implicit normalization or trimming: `text` values are compared as exact octets after UTF-8 validation, and names are case-sensitive.
-- **R2.4** Optional fields use the explicit presence byte defined by the owning frame; no implicit sentinels. There are no varints, implicit padding or trailing bytes. All booleans are `u8` with only 0 or 1 accepted. Nonzero undefined enum values MUST be rejected.
+- **R2.4** Optional fields are present only as determined by an explicit byte defined by the owning frame: a presence byte, or for HELLO the `mode` byte (R2.14); no implicit sentinels. There are no varints, implicit padding or trailing bytes. All booleans are `u8` with only 0 or 1 accepted. Nonzero undefined enum values MUST be rejected.
 - **R2.5** A receiver MUST reject truncation, trailing bytes, unknown frame codes, reserved flag bits, lengths above effective limits, invalid UTF-8, and malformed presence bytes before executing any application effect. Implementations MUST check arithmetic overflow before allocating or adding lengths.
 
 ### 2.2 Inner Frame
@@ -66,8 +66,9 @@ Application / Auth Provider → KMTProto Core → Channel Adapter
 | 8 | body_length | body |
 
 - **R2.6** Exact inner length MUST equal `8 + body_length`.
-- **R2.7** Maximum inner frame size is 1,048,576 bytes including the 8-byte header unless a lower negotiated limit applies. Before WELCOME, this default is mandatory. Any later advertised limit can only lower the effective maximum for this connection. Channel adapters enforce their own bounds including any framing or protection overhead.
+- **R2.7** Maximum inner frame size is 1,048,576 bytes including the 8-byte header unless a lower negotiated limit applies. Before WELCOME, this default is mandatory for Frames sent by the Client; the Server MUST NOT send a Frame before WELCOME larger than the HELLO/RESUME ClientLimits `max_frame_bytes`. The WELCOME `max_frame_bytes` is the effective limit in both directions for the connection and MUST NOT exceed the Client's advertised value (R14.8). Channel adapters enforce their own bounds including any framing or protection overhead.
 - **R2.8** The Channel Adapter transports each complete Frame and applies deployment-specific protection. The inner header and body are protocol data, not a cryptographic record; KMTProto does not mandate a particular encryption method.
+- **R2.23** A V1 receiver that reads a header `version` other than 1 MUST NOT parse the body. If it is the Server in CHANNEL_READY, it SHOULD send one V1 ERROR UNSUPPORTED_VERSION (code 16) before closing the Channel; in every other case it closes the Channel. There is no in-band version negotiation: a peer that receives UNSUPPORTED_VERSION MAY reconnect using version 1.
 
 ### 2.3 Frame type registry
 
@@ -98,7 +99,8 @@ Application / Auth Provider → KMTProto Core → Channel Adapter
 ### 2.4 Common structures
 
 - `Cursor`: `text stream_id, u64 last_seq`. A zero `last_seq` means no EVENT committed.
-- `Limits`: `u32 max_frame_bytes, u16 max_inflight_send, u16 max_inflight_request, u32 max_replay_events, u16 max_state_items, u32 heartbeat_ms, u32 idle_timeout_ms, u32 session_ttl_seconds, u32 absolute_remaining_seconds`. Value constraints are in section 14.
+- `Limits`: `u32 max_frame_bytes, u16 max_inflight_send, u16 max_inflight_request, u16 max_inflight_query, u32 max_replay_events, u16 max_state_items, u32 heartbeat_ms, u32 idle_timeout_ms, u32 session_ttl_seconds, u32 absolute_remaining_seconds`. Value constraints are in section 14.
+- `ClientLimits`: `u32 max_frame_bytes, u32 max_sync_entries`. Value constraints are in R14.8.
 - `Capabilities`: `u16 count, count × u16 capability_code`.
 - `StateEntry`: `text namespace, text object_id, u64 version, u8 deleted, bytes data`.
 - `StateKey`: `text namespace, text object_id`.
@@ -108,16 +110,16 @@ Application / Auth Provider → KMTProto Core → Channel Adapter
 
 - **R2.10** Capability codes MUST be strictly ascending and unique. Unknown optional capability codes are ignored, not echoed.
 - **R2.11** Deleted StateEntry values MUST carry zero-length `data`. State versions start at 1; a version-0 StateEntry is never valid.
-- **R2.12** ErrorRef kind 0 means no reference and MUST use the all-zero `ref_id`; kind 1 refers to a Message/Request ID.
+- **R2.12** ErrorRef kind 0 means no reference and MUST use the all-zero `ref_id`; kind 1 refers to a Message/Request ID; kind 2 refers to a STATE_QUERY `query_id`. Kinds 1 and 2 MUST carry a nonzero `ref_id`.
 - **R2.13** `absolute_remaining_seconds` is the time from WELCOME emission to the Session's immutable absolute deadline; it is never zero.
 
 ### 2.5 Frame bodies
 
 | Frame | Exact body fields |
 |---|---|
-| HELLO | `u8 mode, text stream_id, Capabilities, u8 cursor_present, [Cursor], u8 state_sync_requested` |
+| HELLO | `u8 mode, text stream_id, Capabilities, ClientLimits, [u64 cursor_last_seq], u8 state_sync_requested` |
 | WELCOME | `id128 session_id, text stream_id, u8 admission, u64 generation, u64 replay_to, Limits, Capabilities` |
-| RESUME | `id128 session_id, Cursor, Capabilities, u8 state_sync_requested` |
+| RESUME | `id128 session_id, Cursor, Capabilities, ClientLimits, u8 state_sync_requested` |
 | SEND | `id128 msg_id, bytes content` |
 | ACK | `id128 msg_id, u8 outcome, bytes result` |
 | QUICK_ACK | `id128 msg_id` |
@@ -135,10 +137,10 @@ Application / Auth Provider → KMTProto Core → Channel Adapter
 | SYNC_PAGE | `id128 sync_id, u32 page_index, u8 final_page, u16 count, count × StateEntry` |
 | SYNC_COMMIT | `id128 sync_id, u64 baseline_seq` |
 
-All fields are serialized in the listed order. Fields in brackets are present only if the preceding presence flag equals 1.
+All fields are serialized in the listed order. Fields in brackets are present only as stated by the owning clause (R2.4).
 
-- **R2.14** HELLO `mode`: 0 = create a new Session, 1 = attach to an existing authorized Stream. Mode 0 requires empty `stream_id` and `cursor_present`=0; the Application selects an authorized existing Stream or creates a new Stream (R5.12). Mode 1 requires nonempty `stream_id` and `cursor_present`=1. The Cursor `stream_id` MUST equal the HELLO `stream_id`.
-- **R2.15** WELCOME `admission`: 0 NEW, 1 ATTACHED, 2 RESUMED, 3 FULL_SYNC (uses SYNC_BEGIN/SYNC_PAGE/SYNC_COMMIT). `generation` starts at 1 and increases on takeover. `replay_to` may be zero only for an empty Stream.
+- **R2.14** HELLO `mode`: 0 = create a new Session, 1 = attach to an existing authorized Stream. Mode 0 requires empty `stream_id` and omits `cursor_last_seq`; the Application selects an authorized existing Stream or creates a new Stream (R5.12). Mode 1 requires nonempty `stream_id` and includes `cursor_last_seq`; together they form the Client's Cursor for that Stream.
+- **R2.15** WELCOME `admission`: 0 NEW, 1 ATTACHED, 2 RESUMED, 3 FULL_SYNC (uses SYNC_BEGIN/SYNC_PAGE/SYNC_COMMIT). `generation` starts at 1, is never zero, and increases on takeover. The Client never echoes `generation`; it is informational (diagnostics, logging, ordering competing Channels of one Session) and fencing is enforced by the Server alone. `replay_to` may be zero only for an empty Stream.
 - **R2.16** `outcome` in ACK and RESPONSE: 0 SUCCESS, 1 APPLICATION_ERROR.
 - **R2.17** `state_sync_requested` in HELLO and RESUME MUST be 0 or 1; its meaning is the table in R5.19.
 - **R2.18** ERROR `detail` MAY be empty. STATE_QUERY MUST have at least one key.
@@ -168,6 +170,7 @@ All fields are serialized in the listed order. Fields in brackets are present on
 - **R3.9** An Application-provided Auth Provider authenticates a Principal using trusted out-of-band connection context or explicitly authenticated credentials. The credential format, authentication exchange and mechanism (cookie, token, mTLS, etc.) are outside the protocol; a deployment MUST define a concrete mechanism and credential transport before admitting a Session. No authentication mechanism is implied by the binary Frames. Deployments MUST satisfy the Channel security and Auth Provider contracts of this section; no particular transport or authentication credential format is mandated by this specification.
 - **R3.10** The Core MUST require authorization for Session creation, Stream attachment and RESUME before binding a Connection. Authentication and authorization failures MUST NOT mutate Session state, increment its generation, or fence an existing Connection.
 - **R3.11** An optional deployment profile MAY specify cookie, token or mTLS binding without changing these Frames.
+- **R3.17** V1 Frames carry no credentials, so a credential cannot be refreshed on an admitted Channel. Reauthorization (R6.7, R6.8) asks the Auth Provider whether the Principal bound at admission is still authorized for the Session, using server-side state such as revocation lists, account status or a server-held refresh grant; it MUST NOT fail solely because a short-lived credential presented at Channel establishment has passed its own expiry. A deployment whose policy requires a fresh credential instead MUST document that the Client reconnects with RESUME (a Generation takeover) before that credential expires.
 
 ### 3.4 TCP binding
 
@@ -205,7 +208,7 @@ All fields are serialized in the listed order. Fields in brackets are present on
 ### 5.1 Admission preconditions
 
 - **R5.1** The Server MUST validate Channel policy, authenticate the Principal and authorize the target Session/Stream before accepting HELLO or RESUME as an admission request. Authentication may occur in the hosting application or Channel establishment, but the credential acquisition and verification mechanism MUST be defined by the deployment.
-- **R5.2** An authorization failure MUST NOT change Session ownership, generation, cursor or dedup state. An unauthorized caller MUST NOT learn whether a Session ID exists; admission authorization failures SHOULD be reported with a generic failure and closed, without a distinguishable unknown-Session response.
+- **R5.2** An authorization failure MUST NOT change Session ownership, generation, cursor or dedup state. An unauthorized caller MUST NOT learn whether a Session ID exists: admission authorization failures and unknown Session IDs MUST both be reported as UNAUTHORIZED and closed (R13.7). Servers SHOULD make the two cases indistinguishable in timing as well, for example by performing an equivalent store lookup and authorization call for unknown IDs.
 - **R5.3** Admission MUST first authenticate and authorize the Principal, validate Session/Stream/Cursor, and establish replay feasibility or Full Sync availability. The Server MUST authorize before allocating or fencing. Only then may a RESUME atomically change the owner Generation.
 - **R5.4** A failed admission MUST NOT fence an existing owner or create a visible partial Session. The Server MUST NOT expose a newly allocated Session before its durable record is committed.
 - **R5.5** The feasibility check and ownership commit MUST serialize with relevant retention/pruning decisions: replay records needed by the admitted attempt MUST be pinned until its replay completes or the attempt is aborted. If pinning fails, admission fails without takeover. A cursor beyond the current Stream head, a mismatched Stream or an unrecognized Cursor MUST NOT be silently clamped.
@@ -234,13 +237,13 @@ All fields are serialized in the listed order. Fields in brackets are present on
 
 ### 5.4 HELLO ATTACH
 
-- **R5.15** ATTACH requires a Client-supplied existing `stream_id`, Cursor and `state_sync_requested` flag, and creates a separate Session. The Server authenticates and authorizes access to that Stream, creates a new Session with generation=1 and sends WELCOME admission=ATTACHED only after proving and pinning the complete replay interval. If the Cursor cannot be replayed, it MAY use FULL_SYNC only when a complete consistent baseline is available; otherwise admission MUST be rejected before creating the Session.
+- **R5.15** ATTACH requires a Client-supplied existing `stream_id`, Cursor and `state_sync_requested` flag, and creates a separate Session. The Server authenticates and authorizes access to that Stream, creates a new Session with generation=1 and chooses the admission path by the R5.19 table. With `state_sync_requested`=0 it sends WELCOME admission=ATTACHED only after proving and pinning the complete replay interval; if the Cursor cannot be replayed, it MAY use FULL_SYNC only when a complete consistent baseline is available, and otherwise MUST reject with REPLAY_UNAVAILABLE before creating the Session. With `state_sync_requested`=1 it uses FULL_SYNC or rejects.
 - **R5.16** Stream attachment MUST NOT take over another Session or fence its Connection. Each Session has its own deduplication scope.
 
 ### 5.5 RESUME
 
 - **R5.17** RESUME requires an existing Session ID and preserves its SEND dedup/outbox identity. The Client supplies `session_id`, Cursor, Capabilities and a mandatory `state_sync_requested` boolean. The Server verifies the Session is unexpired, authorizes the authenticated Principal for both the Session and its bound Stream, and verifies the Cursor `stream_id` matches the Session Stream. Only after those checks and a serialized choice of either a pinned replay interval or a provably complete consistent Full Sync baseline does it persist generation+1 and the new owner, fencing the old owner. It then sends WELCOME admission=RESUMED for replay or admission=FULL_SYNC for a verified complete baseline. WELCOME MUST carry the new generation.
-- **R5.18** If replay is impossible, the Server MUST choose FULL_SYNC when `state_sync_requested`=1, and otherwise MAY choose FULL_SYNC only after verifying its baseline feasibility before takeover; otherwise it MUST reject RESUME without changing Generation or owner. The retention decision MUST serialize with pruning. A failed RESUME MUST NOT fence the old owner.
+- **R5.18** The admission path follows the R5.19 table exactly. With `state_sync_requested`=1 the Server MUST use FULL_SYNC, even when replay would be possible, or reject if no complete consistent baseline is available. With `state_sync_requested`=0 the Server MUST replay when replay is possible; if replay is impossible it MAY choose FULL_SYNC only after verifying baseline feasibility before takeover, and otherwise MUST reject with REPLAY_UNAVAILABLE (R13.10). Every rejection leaves Generation and owner unchanged. The retention decision MUST serialize with pruning. A failed RESUME MUST NOT fence the old owner.
 
 ### 5.6 State synchronization admission
 
@@ -250,12 +253,12 @@ All fields are serialized in the listed order. Fields in brackets are present on
 |---|---:|---|
 | HELLO NEW | 0 | Bind Application-selected Stream at head; WELCOME NEW, READY |
 | HELLO NEW | 1 | Full Sync of selected Stream at a proven cut, or reject |
-| HELLO ATTACH | 0 | Replay from supplied Cursor; safe Full Sync fallback or reject |
-| HELLO ATTACH | 1 | Full Sync of specified Stream or reject; supplied Cursor used only to validate Stream identity |
-| RESUME | 0 | Replay from durable Cursor; safe Full Sync fallback or reject |
-| RESUME | 1 | Full Sync of bound Stream or reject; preserve Session ID and SEND dedup |
+| HELLO ATTACH | 0 | Replay from supplied Cursor if possible; otherwise safe Full Sync fallback or REPLAY_UNAVAILABLE |
+| HELLO ATTACH | 1 | Full Sync of specified Stream (even if replay is possible) or reject; supplied `cursor_last_seq` MUST NOT exceed the Stream head but is otherwise ignored |
+| RESUME | 0 | Replay from durable Cursor if possible; otherwise safe Full Sync fallback or REPLAY_UNAVAILABLE |
+| RESUME | 1 | Full Sync of bound Stream (even if replay is possible) or reject; preserve Session ID and SEND dedup |
 
-For all requests, the Server MUST authorize before allocating or fencing and MUST reject Full Sync if no complete consistent projection is available. An empty new Stream MAY have an empty baseline at baseline_seq=0; State from a different Stream MUST NOT be imported as its projection.
+A Client rejected with REPLAY_UNAVAILABLE MAY retry the same admission with `state_sync_requested`=1. For all requests, the Server MUST authorize before allocating or fencing and MUST reject Full Sync if no complete consistent projection is available. An empty new Stream MAY have an empty baseline at baseline_seq=0; State from a different Stream MUST NOT be imported as its projection.
 
 - **R5.20** NEW, ATTACH and RESUME are not interchangeable.
 
@@ -271,7 +274,7 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 
 - **R6.1** A Session expires at the earlier of durable `expires_at` and immutable `absolute_expires_at` in authoritative Session storage. Admission and expiry decisions are serialized across nodes using that store's clock; Server wall-clock authority MUST be shared and consistent enough for the store's decision. Node-local monotonic clocks MAY schedule wakeups but MUST NOT independently decide durable cross-node expiry. After process restart, the persisted deadline is authoritative; restart MUST NOT reset TTL. The authoritative Session store MUST serialize successful admission, expiry and Generation takeover across nodes.
 - **R6.2** The authoritative store persists `expires_at`, `absolute_expires_at`, `last_renewal_at`, Principal binding and Generation. A deployment MUST choose and document a positive absolute Session lifetime of at least `4 * session_ttl_seconds`, so that rotation (R6.11) has time to complete. `absolute_expires_at` is fixed on Session creation and MUST NOT be extended by RESUME or PING.
-- **R6.3** At admission the store atomically checks that neither deadline has been reached, validates authorization and replay/baseline feasibility, then commits the new Generation and `expires_at = min(now + session_ttl_seconds, absolute_expires_at)`. HELLO NEW and HELLO ATTACH create Sessions with a persisted deadline and the immutable absolute cap; RESUME before expiry refreshes the deadline within that cap; after expiry RESUME MUST fail without takeover. New Session creation is required after absolute expiry, and an old SEND outbox MUST NOT be silently migrated.
+- **R6.3** At admission the store atomically checks that neither deadline has been reached, validates authorization and replay/baseline feasibility, then commits the new Generation, `expires_at = min(now + session_ttl_seconds, absolute_expires_at)` and `last_renewal_at = now`. HELLO NEW and HELLO ATTACH create Sessions with a persisted deadline and the immutable absolute cap; RESUME before expiry refreshes the deadline within that cap; after expiry RESUME MUST fail without takeover. New Session creation is required after absolute expiry, and an old SEND outbox MUST NOT be silently migrated.
 - **R6.4** Expiry fences the owner and stops new effects, including when a Channel remains connected. A commit racing expiry MUST be serialized with the same ownership/fencing decision or be durably idempotent. Committed outcomes remain available for reconciliation according to retention policy, and expiration cleanup MUST NOT erase records required to reconcile indeterminate external effects. Session expiry, auth revocation and Channel closure MUST stop further Session-scoped operations.
 
 ### 6.2 Renewal on a healthy connection
@@ -279,11 +282,13 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 - **R6.5** WELCOME carries `session_ttl_seconds` and `absolute_remaining_seconds`. The Client keeps three estimates on its monotonic clock, each deliberately early. They are safe because the Server's reading of its clock lies between the moment the Client sent HELLO/RESUME and the moment it received WELCOME.
   - `absolute_deadline` = (time the Client sent HELLO or RESUME) + `absolute_remaining_seconds`. Nothing moves it.
   - `lease_deadline` = `min(` (time the Client sent HELLO or RESUME) + `session_ttl_seconds`, `absolute_deadline` `)`.
-  - `renewal_due` = (time the Client received WELCOME) + `session_ttl_seconds / 4`, plus a small drift allowance (for example 1%).
+  - `renewal_due` = (time the Client received WELCOME) + `renewal_interval_ms`, plus a small drift allowance (for example 1%).
+
+  `renewal_interval_ms` is exactly `session_ttl_seconds * 250` milliseconds (one quarter of the TTL, an exact integer). Client and Server MUST both use this value, so no rounding difference can make the Client's due time earlier than the Server's.
 - **R6.6** Ordinary PING/PONG, SEND, REQUEST and Channel activity do NOT extend the lease. A due, reauthorized renewal PING is the only in-Channel lease renewal mechanism.
-- **R6.7** The Server MUST reauthorize the Principal through the Auth Provider before renewing an existing lease. Renewals are throttled: a PING received at or after `last_renewal_at + session_ttl_seconds/4` is a renewal PING; earlier PINGs are ordinary liveness probes and force no write. For a renewal PING, the Server MUST first reauthorize and durably persist `expires_at = min(now + ttl, absolute_expires_at)` and `last_renewal_at = now` before sending the matching PONG. A matching PONG for a renewal PING proves persisted renewal, not merely connectivity.
+- **R6.7** The Server MUST reauthorize the Principal through the Auth Provider before renewing an existing lease. Renewals are throttled: a PING received at or after `last_renewal_at + renewal_interval_ms` (R6.5) is a renewal PING; earlier PINGs are ordinary liveness probes and force no write. For a renewal PING, the Server MUST first reauthorize and durably persist `expires_at = min(now + ttl, absolute_expires_at)` and `last_renewal_at = now` before sending the matching PONG. A matching PONG for a renewal PING proves persisted renewal, not merely connectivity.
 - **R6.8** If renewal fails, the Server MUST NOT send a matching PONG: it MUST close the Channel, using AUTH_REVOKED when authorization was revoked or SESSION_EXPIRED when a deadline has elapsed. A PING arriving after expiry cannot revive the Session. Authorization revocation MUST be checked at effect boundaries independently of heartbeat cadence.
-- **R6.9** The Client sends a renewal PING at or after `renewal_due`, and ordinary liveness PINGs (R7.1) otherwise. Because `renewal_due` is never earlier than the Server's due time, the Server classifies every PING the Client treats as a renewal PING as one. When the matching PONG of a renewal PING arrives, the Client sets `lease_deadline = min(` (time it sent that PING) + `session_ttl_seconds`, `absolute_deadline` `)` and `renewal_due` = (time it received that PONG) + `session_ttl_seconds / 4`. A PONG for any PING sent before `renewal_due` carries no lease information and MUST NOT move `lease_deadline`.
+- **R6.9** The Client sends a renewal PING at or after `renewal_due`, and ordinary liveness PINGs (R7.1) otherwise. Because `renewal_due` is never earlier than the Server's due time, the Server classifies every PING the Client treats as a renewal PING as one. When the matching PONG of a renewal PING arrives, the Client sets `lease_deadline = min(` (time it sent that PING) + `session_ttl_seconds`, `absolute_deadline` `)` and `renewal_due` = (time it received that PONG) + `renewal_interval_ms`. The Client MUST NOT have more than one renewal PING outstanding. A PONG for any PING sent before `renewal_due` carries no lease information and MUST NOT move `lease_deadline`.
 - **R6.10** If `lease_deadline`, less a safety margin of at least `2 * heartbeat_ms`, is reached without a confirmation, the Client MUST stop new effects and reconnect with RESUME; it MUST NOT silently continue on the old Channel.
 - **R6.11** When `absolute_deadline` minus the current time falls below `2 * session_ttl_seconds`, the Client SHOULD stop starting new SENDs on this Session, wait for outstanding SENDs to reach a final ACK, and continue on a new Session (HELLO NEW, or ATTACH with its Cursor). SENDs still unresolved at the deadline are handled by R6.12. At absolute expiry the Server SHOULD send SESSION_EXPIRED before closing.
 
@@ -295,9 +300,9 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 ## 7. Heartbeat, idle timeout and gaps
 
 - **R7.1** Heartbeat is application-level and does not substitute for transport liveness or cryptographic freshness. Either peer MAY send PING, but the Client MUST originate liveness PINGs at intervals no greater than `heartbeat_ms` while an admitted Channel is active.
-- **R7.2** A receiver MUST send a matching PONG for an authorized, nonexpired Session unless the renewal-PING failure rule (R6.8) applies. The PONG nonce MUST match the outstanding PING; an unsolicited PONG MUST be ignored.
+- **R7.2** A receiver MUST send a matching PONG for an authorized, nonexpired Session unless the renewal-PING failure rule (R6.8) applies. A peer MAY have several PINGs outstanding; each outstanding PING it originated MUST carry a distinct nonce. PONGs MAY be sent in a different order than their PINGs arrived, so that an ordinary PING is not delayed behind a renewal PING's durable write. A PONG is matched to an outstanding PING by nonce alone; a PONG matching no outstanding PING MUST be ignored. Waiting for a slow renewal PONG does not suspend the R7.1 liveness cadence.
 - **R7.3** Any complete valid inbound Frame resets the local inbound-idle timer; invalid frames never do. If no valid inbound Frame arrives for `idle_timeout_ms`, the peer MUST close the Channel. A Client MAY close sooner after one unanswered heartbeat interval, but MUST NOT infer successful lease renewal from silence.
-- **R7.4** The Client tracks `next_expected`, an in-memory sequence initialized to `Cursor + 1` when WELCOME is received and advanced for every EVENT it accepts. An EVENT whose `seq` is not `next_expected`, in replay or READY, is a gap or duplicate violation: the Client MUST NOT accept it, MUST close the Channel, and MUST initiate RESUME on a new Channel using its durable Cursor.
+- **R7.4** The Client tracks `next_expected`, an in-memory sequence advanced for every EVENT it accepts. It is initialized when WELCOME is received: for admission NEW to WELCOME `replay_to + 1`; for ATTACHED and RESUMED to the supplied Cursor `+ 1`. For FULL_SYNC it is undefined while the baseline transfers, since no EVENT is valid then (R12.7), and it is set to `baseline_seq + 1` when the Client durably commits the baseline (R12.8), regardless of any Cursor held before. An EVENT whose `seq` is not `next_expected`, in replay or READY, is a gap or duplicate violation: the Client MUST NOT accept it, MUST close the Channel, and MUST initiate RESUME on a new Channel using its durable Cursor.
 - **R7.5** The durable Cursor is separate from `next_expected`. It advances only to a sequence whose effects are durable, and the Client MAY commit in batches, so the Cursor may lag `next_expected - 1` by any number of accepted EVENTs. After a reconnect those EVENTs are replayed and applied again, which is safe because applying an EVENT is atomic with the Cursor or idempotent by `event_id`. The Client MUST NOT discard an accepted EVENT before its effects are durable, and it MUST have committed through `replay_to` before it treats recovery as complete.
 - **R7.6** During recovery the Client MUST reject premature live EVENTs, including EVENTs arriving after a partial-replay ERROR on that Channel. On auth revocation or expiry, the Client MUST stop retries on that Session.
 
@@ -336,6 +341,7 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 - **R8.17** The Server MUST retain dedup claims and terminal outcomes for the entire interval in which it accepts retries for that Session, which MUST cover the advertised Session lifetime. It MUST NOT accept a retry if the corresponding dedup history has been pruned. Session expiry forbids further retries and RESUME; an old outbox MUST NOT be automatically migrated into a new Session, and the Client MUST surface unresolved operations for application reconciliation.
 - **R8.18** `max_inflight_send` bounds outstanding SENDs (section 13.3). RATE_LIMITED on SEND MUST carry ErrorRef to `msg_id` and MUST NOT imply a durable claim was made; if a claim already exists, use SEND_PENDING or the existing terminal result instead. SEND retries always reuse the original `msg_id` and exact bytes, never assume RATE_LIMITED is a final ACK, and stop at Session expiry.
 - **R8.19** A SEND that the admitted Principal is not permitted to perform is a business outcome, not a protocol failure: the Server answers it with a final ACK whose outcome is APPLICATION_ERROR after the normal claim and commit.
+- **R8.20** Before storing a new item in the outbox, the Client MUST verify that the encoded SEND Frame fits the Session's effective `max_frame_bytes`, and MUST reject an oversized operation to the Application locally without storing it. Because limits never decrease within a Session (R14.4), an item admitted to the outbox stays sendable on every later Channel of that Session. If an outbox item nevertheless does not fit the current limit, the Client MUST NOT send it; it MUST surface the item to the Application as unresolved, exactly like an INDETERMINATE outcome, since the Server may not have seen it.
 
 ## 9. REQUEST and RESPONSE
 
@@ -387,6 +393,7 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 - **R11.7** Pages MUST be contiguous with `page_index` starting at 0. The concatenation of results MUST have exactly the number of requested keys, in request order, and each PRESENT/DELETED entry's key MUST match the corresponding requested key. There MUST be exactly one `final_page`=1, including for a one-page response. Empty nonfinal pages MUST NOT be sent. The total number of results MUST NOT exceed the requested key count. Each page MUST fit the negotiated Frame limit. A Server that cannot encode a single result in one Frame MUST fail the query, not truncate it.
 - **R11.8** Any malformed page index, inconsistent result key, incomplete response or partial authorization MUST fail the entire query.
 - **R11.9** A Client MUST stage all pages until `final_page`, validate counts, order and identity, then apply the query result atomically as a read result. A failed or interrupted query MUST NOT partially update the application-visible result. The query is scoped to the current Session Generation; late pages from a fenced connection MUST be discarded. A new query after reconnect MUST use a fresh `query_id`.
+- **R11.15** `query_id` MUST be unique among the Client's outstanding queries on the Channel. At most `max_inflight_query` STATE_QUERYs may be outstanding; a query is outstanding until its `final_page` or a query-scoped ERROR arrives. Every query-scoped ERROR (STATE_QUERY_FAILED, STATE_CONFLICT, LIMIT_EXCEEDED or RATE_LIMITED for a query) MUST carry ErrorRef kind 2 with the `query_id`, and terminates only that query. Pages of different queries MAY interleave; the Client stages them per `query_id`.
 - **R11.10** STATE_QUERY is a bounded, point-in-time read. It is not a Full Sync baseline, never advances an EVENT Cursor, does not imply an EVENT/State cut, and MUST NOT be used as a recovery baseline.
 
 ### 11.3 STATE_UPDATE
@@ -435,27 +442,30 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 | 1 | MALFORMED_FRAME | 0 | Invalid encoding or frame direction |
 | 2 | PROTOCOL_STATE | 0 | Frame illegal in current connection state |
 | 3 | UNAUTHORIZED | 0 | Authentication/authorization denied, indistinguishable from unknown protected Session |
-| 4 | ADMISSION_REJECTED | 0 | Cursor invalid, expired or replay/full-sync unavailable |
+| 4 | ADMISSION_REJECTED | 0 | Admission request invalid: Cursor beyond Stream head, Cursor Stream mismatch, or a requested Full Sync unavailable |
 | 5 | LIMIT_EXCEEDED | 0 | Frame, field, list or State-item size bound violated; retrying the same operation cannot succeed |
 | 6 | UNSUPPORTED_CAPABILITY | 0 | Required local feature not available; no negotiation fallback implied |
 | 7 | STATE_CONFLICT | 0 | Same key/version with different data |
 | 8 | STATE_QUERY_FAILED | 1 | Consistent read could not complete; retry as new query after READY |
 | 9 | SEND_CONFLICT | 0 | Reused msg_id with different bytes |
 | 10 | SEND_PENDING | 1 | Same SEND is durably claimed but has no terminal outcome; retry identical SEND only |
-| 11 | SESSION_EXPIRED | 0 | Authorized Session no longer resumable |
+| 11 | SESSION_EXPIRED | 0 | Authorized Session reached `expires_at` or `absolute_expires_at`; no longer resumable |
 | 12 | SYNC_ABORTED | 0 | Baseline transaction cannot complete safely |
 | 13 | REPLAY_PARTIAL | 1 | A bounded replay chunk was delivered; reconnect using the last durably applied Cursor |
 | 14 | RATE_LIMITED | 1 | Operation rejected before effects, including an in-flight SEND or REQUEST count above the advertised limit; retry no sooner than retry_after_ms |
 | 15 | AUTH_REVOKED | 0 | Previously admitted Principal authorization revoked; close Channel, no further effects |
+| 16 | UNSUPPORTED_VERSION | 0 | Frame header version is not 1; Channel closed (R2.23) |
+| 17 | REPLAY_UNAVAILABLE | 0 | Cursor valid but not replayable and no Full Sync was chosen; Session (if any) intact, retry with `state_sync_requested`=1 permitted |
 | 1001 | SEND_INDETERMINATE | 0 | Business effect cannot be proved committed or absent; application reconciliation required |
 
 ### 13.2 Rules
 
 - **R13.3** RATE_LIMITED MUST carry `retry_after_ms` > 0, and is the only code used for in-flight count limits. Other errors MUST carry `retry_after_ms`=0 except SEND_PENDING, which MAY carry a positive retry delay. A retryable error does not override SEND identity, expiry or authorization constraints. The Client MUST wait at least `retry_after_ms` before retrying the referenced operation. `retry_after_ms` is advisory to load management but a mandatory minimum when nonzero; zero means no server-specified minimum, not immediate guaranteed availability.
-- **R13.4** For SEND errors, ErrorRef kind=1 refers to `msg_id`; for REQUEST errors, kind=1 refers to `request_id`. For admission, State and Sync errors without a Message/Request identifier, ErrorRef kind=0 MUST carry the all-zero ID.
+- **R13.4** For SEND errors, ErrorRef kind=1 refers to `msg_id`; for REQUEST errors, kind=1 refers to `request_id`; for STATE_QUERY errors, kind=2 refers to `query_id` (R11.15). Admission, Sync, recovery and connection errors carry ErrorRef kind=0 with the all-zero ID.
 - **R13.5** SEND_PENDING is nonterminal and permits only an identical SEND retry. A CLAIMED operation MUST be reconciled after a crash; an unprovable outcome becomes SEND_INDETERMINATE, never automatic re-execution. SEND_INDETERMINATE MUST NOT trigger automatic replay.
 - **R13.6** A fatal framing or state error closes the Channel. An operation-scoped error terminates only that operation unless the Session is no longer safe; SYNC_ABORTED closes the Channel. REPLAY_PARTIAL is recovery-scoped (ErrorRef kind=0) and closes the Channel after delivering a contiguous chunk.
 - **R13.7** UNAUTHORIZED is used only for failed admission and MUST NOT distinguish an absent Session from an unauthorized one. AUTH_REVOKED is used only for an already authenticated Session whose authorization is subsequently withdrawn, and MUST close the Channel. AUTH_REVOKED and SESSION_EXPIRED close the Channel and prohibit further effects.
+- **R13.10** Admission rejections by an authorized Principal use exactly one code each: SESSION_EXPIRED when the Session's deadline has passed; REPLAY_UNAVAILABLE when the Cursor is valid but its interval is no longer retained and no Full Sync was chosen (`state_sync_requested`=0); ADMISSION_REJECTED for an invalid Cursor or Stream mismatch, or when a requested Full Sync is unavailable; LIMIT_EXCEEDED or UNSUPPORTED_CAPABILITY when the admission cannot meet the Client's limits or requirements. Only REPLAY_UNAVAILABLE invites a different admission request on the same Session; SESSION_EXPIRED requires a new Session (R6.12).
 
 ### 13.3 Backpressure
 
@@ -466,11 +476,12 @@ For all requests, the Server MUST authorize before allocating or fencing and MUS
 
 ### 14.1 Limits
 
-- **R14.1** WELCOME Limits values MUST be nonzero. `max_frame_bytes` MUST be in [8,1048576], but a deployment MUST set it large enough for its mandatory control frames. `max_inflight_send` and `max_inflight_request` are positive u16 counts of uncompleted operations; `max_replay_events` is a positive u32 bound on events transmitted in one replay attempt; `max_state_items` is a positive u16 bound on State keys in one query and State entries in one page.
-- **R14.2** `heartbeat_ms`, `idle_timeout_ms`, `session_ttl_seconds` and `absolute_remaining_seconds` MUST be positive. `idle_timeout_ms` MUST be greater than `heartbeat_ms`. `heartbeat_ms` MUST NOT exceed `session_ttl_seconds * 1000 / 8` (integer division), so that several renewal opportunities exist between the first renewal due time (`session_ttl_seconds / 4`) and the end of the lease. `absolute_remaining_seconds` MAY be smaller than `session_ttl_seconds` near the end of a Session's life. A Client MUST close a Connection whose WELCOME violates these bounds.
+- **R14.1** WELCOME Limits values MUST be nonzero. `max_frame_bytes` MUST be in [4096,1048576]; 4096 is enough for every control Frame with maximum-length text fields. `max_inflight_send`, `max_inflight_request` and `max_inflight_query` are positive u16 counts of uncompleted operations; `max_replay_events` is a positive u32 bound on events transmitted in one replay attempt; `max_state_items` is a positive u16 bound on State keys in one query and State entries in one page.
+- **R14.2** `heartbeat_ms`, `idle_timeout_ms`, `session_ttl_seconds` and `absolute_remaining_seconds` MUST be positive. `idle_timeout_ms` MUST be greater than `heartbeat_ms`. `heartbeat_ms` MUST NOT exceed `session_ttl_seconds * 125` (one eighth of the TTL in milliseconds, an exact integer), so that several renewal opportunities exist between the first renewal due time (`renewal_interval_ms`, R6.5) and the end of the lease. `absolute_remaining_seconds` MAY be smaller than `session_ttl_seconds` near the end of a Session's life. A Client MUST close a Connection whose WELCOME violates these bounds.
 - **R14.3** Implementations MUST reject multiplication/addition overflow and oversized fields before allocation.
-- **R14.4** All pages and Frames MUST respect `max_frame_bytes`. WELCOME `max_frame_bytes` MUST be large enough to encode WELCOME itself, ERROR and mandatory recovery control Frames; otherwise admission fails. An oversized individual EVENT or StateEntry cannot be silently split: reject the originating application payload or fail admission/query/sync safely. Limits apply to the admitted Connection and are not renegotiated mid-Generation.
-- **R14.5** Text bounds: `stream_id`, `namespace`, `object_id`, `method` and `scope_id` are 1..255 UTF-8 bytes; ERROR `detail` is 0..1024 bytes. HELLO mode NEW alone permits an empty `stream_id`. The Cursor `stream_id` follows the same bound. The capability list count MUST be at most 64. Zero IDs are forbidden except the null ErrorRef.
+- **R14.4** All pages and Frames MUST respect `max_frame_bytes`. WELCOME `max_frame_bytes` MUST be large enough to encode WELCOME itself, ERROR and mandatory recovery control Frames; otherwise admission fails. An oversized individual EVENT or StateEntry cannot be silently split: reject the originating application payload or fail admission/query/sync safely. Limits apply to the admitted Connection and are not renegotiated mid-Generation. The Server MUST persist the `max_frame_bytes` and `max_inflight_send` of a Session's first WELCOME as that Session's floor, and every later WELCOME for the Session MUST carry values at least that large, so that outbox items admitted under R8.20 remain sendable. A Client MUST NOT advertise a ClientLimits `max_frame_bytes` below the Session's floor on RESUME; if the Server cannot honor the floor it MUST reject the RESUME without takeover.
+- **R14.5** Text bounds: `stream_id`, `namespace`, `object_id`, `method` and `scope_id` are 1..255 UTF-8 bytes; ERROR `detail` is 0..1024 bytes. HELLO mode NEW alone permits an empty `stream_id`. The Cursor `stream_id` follows the same bound. The capability list count MUST be at most 64, and capability code 0 is invalid. Zero IDs are forbidden except the null ErrorRef.
+- **R14.8** HELLO and RESUME carry ClientLimits. ClientLimits `max_frame_bytes` MUST be in [4096,1048576] and bounds every Frame the Server sends; WELCOME `max_frame_bytes` MUST NOT exceed it. `max_sync_entries` is a positive bound on the `total_entries` the Client will stage in one Full Sync; the Server MUST NOT admit a Full Sync whose `total_entries` would exceed it, and rejects that admission with LIMIT_EXCEEDED before takeover. A Client MUST abort a Full Sync whose SYNC_BEGIN `total_entries` exceeds its advertised value.
 
 ### 14.2 Capabilities
 

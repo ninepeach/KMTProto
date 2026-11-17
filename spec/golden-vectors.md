@@ -1,12 +1,12 @@
 # KMTProto V1 — Golden Wire Vectors
 
-**Status: illustrative byte-exact normative vectors.** Hex octets are network-order. Frame header is version=01, type, flags=0000, u32 body length. These examples validate encoding, not authorization or application effects. IDs are 15 zero bytes followed by the shown nonzero suffix. UTF-8 text uses u16 length. Example WELCOME limits: max_frame=1024, inflight SEND/REQUEST=2, max_replay=100, max_state_items=10, heartbeat=1000ms, idle=3000ms, TTL=60s, absolute remaining=3600s. QUICK_ACK requires negotiated capability 1 in a real connection.
+**Status: illustrative byte-exact normative vectors.** Hex octets are network-order. Frame header is version=01, type, flags=0000, u32 body length. These examples validate encoding, not authorization or application effects. IDs are 15 zero bytes followed by the shown nonzero suffix. UTF-8 text uses u16 length. Example ClientLimits in HELLO/RESUME: max_frame=1048576, max_sync_entries=65536. Example WELCOME limits: max_frame=4096, inflight SEND/REQUEST/query=2, max_replay=100, max_state_items=10, heartbeat=1000ms, idle=3000ms, TTL=60s, absolute remaining=3600s. QUICK_ACK requires negotiated capability 1 in a real connection.
 
 | Frame | Type | Complete frame (hex) |
 |---|---:|---|
-| HELLO | 1 | `010100000000000700000000000000` |
-| WELCOME | 2 | `0102000000000044000000000000000000000000000000010001730000000000000000010000000000000000000004000002000200000064000a000003e800000bb80000003c00000e100000` |
-| RESUME | 3 | `010300000000001e000000000000000000000000000000010001730000000000000000000000` |
+| HELLO | 1 | `010100000000000e0000000000001000000001000000` |
+| WELCOME | 2 | `01020000000000460000000000000000000000000000000100017300000000000000000100000000000000000000100000020002000200000064000a000003e800000bb80000003c00000e100000` |
+| RESUME | 3 | `01030000000000260000000000000000000000000000000100017300000000000000000000001000000001000000` |
 | SEND | 4 | `0104000000000015000000000000000000000000000000020000000141` |
 | ACK | 5 | `0105000000000015000000000000000000000000000000020000000000` |
 | QUICK_ACK | 6 | `010600000000001000000000000000000000000000000002` |
@@ -26,15 +26,17 @@
 
 ## Variant vectors
 
-One more example each for behavior that the 19 base vectors do not show: RESUME with `state_sync_requested=1`, an ERROR with a positive `retry_after_ms`, the recovery-scoped REPLAY_PARTIAL, a Full Sync WELCOME (admission=3, generation=2, replay_to=5), and HELLO ATTACH with a Cursor and `state_sync_requested=1`. These rows are validated like the base vectors, with the same type column.
+One more example each for behavior that the 19 base vectors do not show: RESUME with `state_sync_requested=1`, an ERROR with a positive `retry_after_ms`, the recovery-scoped REPLAY_PARTIAL, a Full Sync WELCOME (admission=3, generation=2, replay_to=5), a STATE_QUERY_FAILED that references its `query_id` with ErrorRef kind=2, a REPLAY_UNAVAILABLE admission rejection, and HELLO ATTACH with `cursor_last_seq`=5 and `state_sync_requested=1`. These rows are validated like the base vectors, with the same type column.
 
 | Variant | Type | Complete frame (hex) |
 |---|---:|---|
-| RESUME_FULL_SYNC | 3 | `010300000000001e000000000000000000000000000000010001730000000000000000000001` |
+| RESUME_FULL_SYNC | 3 | `01030000000000260000000000000000000000000000000100017300000000000000000000001000000001000001` |
 | ERROR_RATE_LIMITED | 16 | `011000000000001a000e010100000000000000000000000000000002000001f40000` |
 | ERROR_REPLAY_PARTIAL | 16 | `011000000000001a000d010000000000000000000000000000000000000000000000` |
-| WELCOME_FULL_SYNC | 2 | `0102000000000044000000000000000000000000000000010001730300000000000000020000000000000005000004000002000200000064000a000003e800000bb80000003c00000e100000` |
-| HELLO_ATTACH | 1 | `010100000000001301000173000001000173000000000000000501` |
+| WELCOME_FULL_SYNC | 2 | `01020000000000460000000000000000000000000000000100017303000000000000000200000000000000050000100000020002000200000064000a000003e800000bb80000003c00000e100000` |
+| ERROR_QUERY_FAILED | 16 | `011000000000001a0008010200000000000000000000000000000005000000000000` |
+| ERROR_REPLAY_UNAVAILABLE | 16 | `011000000000001a0011000000000000000000000000000000000000000000000000` |
+| HELLO_ATTACH | 1 | `01010000000000170100017300000010000000010000000000000000000501` |
 
 ## Negative vectors and checks
 
@@ -43,9 +45,13 @@ One more example each for behavior that the 19 base vectors do not show: RESUME 
 - Increase body_length by 1 without adding bytes: reject truncation.
 - Append one trailing octet without changing body_length: reject Frame length mismatch.
 - Change any boolean field from `00`/`01` to `02`: reject enum.
-- WELCOME with `heartbeat_ms` above `session_ttl_seconds * 1000 / 8`, with `idle_timeout_ms` not above `heartbeat_ms`, or with `absolute_remaining_seconds` of 0: reject.
+- WELCOME with `max_frame_bytes` below 4096, with `heartbeat_ms` above `session_ttl_seconds * 125`, with `idle_timeout_ms` not above `heartbeat_ms`, or with `absolute_remaining_seconds` of 0: reject.
 - ERROR RATE_LIMITED with `retry_after_ms` 0, or any other code except SEND_PENDING with a positive `retry_after_ms`: reject.
-- ERROR whose `retryable` byte differs from the registry value for its code: reject.
+- ERROR whose `retryable` byte differs from the registry value for its code, or with a code not in the registry: reject.
+- ERROR with ErrorRef kind 3, or kind 1/2 with an all-zero `ref_id`: reject.
+- HELLO mode 0 with a nonempty `stream_id`, or mode 1 with an empty `stream_id`: reject.
+- STATE_QUERY with count 0, or any text field longer than its R14.5 bound: reject.
+- WELCOME with generation 0, or ClientLimits `max_frame_bytes` below 4096: reject.
 - Replace the final octet of an id128 with zero when all prior bytes are zero: reject forbidden zero ID.
 - Send QUICK_ACK without capability 1 in WELCOME: reject.
 - Send SYNC_COMMIT on a replay-only Session: reject protocol state.
@@ -54,6 +60,6 @@ One more example each for behavior that the 19 base vectors do not show: RESUME 
 
 ## Scope
 
-RESUME includes the mandatory trailing state_sync_requested=0 byte. ERROR includes retry_after_ms=0 after ErrorRef. These are P0/P1 draft-breaking changes; the layouts are in [protocol.md](protocol.md) section 2.5.
+RESUME includes the mandatory trailing state_sync_requested=0 byte. ERROR includes retry_after_ms=0 after ErrorRef. HELLO and RESUME carry ClientLimits after Capabilities; HELLO carries `cursor_last_seq` only in mode 1, with no presence byte; Limits carries `max_inflight_query`. These are draft-breaking changes; the layouts are in [protocol.md](protocol.md) section 2.5.
 
-These vectors cover the 19 Frame bodies with one compact example each, plus five variants for behavior the base examples do not show. They do not establish full malformed-field coverage, multi-page interop or independent implementation conformance. The complete acceptance plan is in [conformance.md](conformance.md).
+These vectors cover the 19 Frame bodies with one compact example each, plus seven variants for behavior the base examples do not show. They do not establish full malformed-field coverage, multi-page interop or independent implementation conformance. The complete acceptance plan is in [conformance.md](conformance.md).
