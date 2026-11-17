@@ -62,6 +62,6 @@ One more example each for behavior that the 19 base vectors do not show: RESUME 
 
 ## Scope
 
-RESUME includes the mandatory trailing state_sync_requested=0 byte. ERROR includes retry_after_ms=0 after ErrorRef. HELLO and RESUME carry ClientLimits after Capabilities; HELLO carries `cursor_last_seq` only in mode 1, with no presence byte; Limits carries `max_inflight_query`; PING carries a trailing `renew` byte (PONG is unchanged). These are draft-breaking changes; the layouts are in [protocol.md](protocol.md) section 2.5.
+RESUME includes the mandatory trailing state_sync_requested=0 byte. ERROR includes retry_after_ms=0 after ErrorRef. HELLO and RESUME carry ClientLimits after Capabilities; HELLO carries `cursor_last_seq` only in mode 1, with no presence byte; Limits carries `max_inflight_query`; PING carries a trailing `renew` byte (PONG is unchanged). These layout changes were made before the freeze; the layouts are in [protocol.md](protocol.md) section 2.5.
 
 These vectors cover the 19 Frame bodies with one compact example each, plus eight variants for behavior the base examples do not show. They do not establish full malformed-field coverage, multi-page interop or independent implementation conformance. The complete acceptance plan is in [conformance.md](conformance.md).

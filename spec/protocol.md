@@ -1,6 +1,6 @@
 # KMTProto V1 — Protocol Specification
 
-**Status: V1 DESIGN DRAFT — P0/P1 revision, consolidated.** This is the single normative specification of KMTProto V1. The wire format is binary; its inner header carries version 1. There is no legacy wire compatibility; the earlier JSON design is superseded.
+**Status: V1 SPECIFICATION FROZEN.** This is the single normative specification of KMTProto V1. The wire format is binary; its inner header carries version 1. There is no legacy wire compatibility; the earlier JSON design is superseded.
 
 KMTProto is a transport-independent binary protocol for reliable messaging, session recovery and state synchronization.
 
@@ -10,7 +10,7 @@ KMTProto is a transport-independent binary protocol for reliable messaging, sess
 
 - **R0.1** This document is the only normative specification of KMTProto V1. [golden-vectors.md](golden-vectors.md) supplies byte-exact vectors for the encoding; [conformance.md](conformance.md) is the normative acceptance plan, a list of expected behaviors that is not evidence that any implementation passed; [secure-channel.md](secure-channel.md) and the programs in `tools/` are informative.
 - **R0.2** If this document is found to contradict itself, or a vector, plan or tool contradicts it, the contradiction is a defect to be corrected. No clause overrides another by precedence.
-- **R0.3** Specification Frozen requires fixed Frame layouts and registries, internally consistent MUST-level semantics, and deterministic byte-level examples. It does not require independent Go/TS implementations. This draft is not frozen.
+- **R0.3** Specification Frozen requires fixed Frame layouts and registries, internally consistent MUST-level semantics, and deterministic byte-level examples. It does not require independent Go/TS implementations. This specification is frozen: Frame layouts, registries and MUST-level semantics change only through a new protocol version; editorial corrections that change no wire bytes and no MUST-level behavior MAY still be made.
 
 ### 0.2 Requirement language
 

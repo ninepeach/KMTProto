@@ -2,7 +2,7 @@
 
 **A transport-independent binary protocol for reliable messaging, session recovery and state synchronization.**
 
-**Status: V1 DESIGN DRAFT — NOT FROZEN.** There is one protocol design and no legacy compatibility requirement. The historical JSON design is superseded, not a supported wire version.
+**Status: V1 SPECIFICATION FROZEN.** Frame layouts, registries and MUST-level semantics are fixed; any wire or semantic change requires a new protocol version. There is one protocol design and no legacy compatibility requirement. The historical JSON design is superseded, not a supported wire version.
 
 ## Architecture
 
